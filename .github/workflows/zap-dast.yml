@@ -1,0 +1,83 @@
+name: DAST - OWASP ZAP Baseline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  zap-baseline:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Bring up stack (backend, frontend, postgres)
+        run: |
+          docker compose down -v
+          docker compose up -d
+          docker ps -a
+
+      - name: Wait for backend (http://localhost:8080/actuator/health)
+        run: |
+          for i in {1..60}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/actuator/health || true)
+            if [ "$code" = "200" ]; then
+              echo "Backend is up."
+              exit 0
+            fi
+            echo "Waiting for backend... ($i/60)"
+            sleep 2
+          done
+          echo "Backend did not become healthy in time."
+          docker compose logs backend || true
+          exit 1
+
+      - name: Wait for frontend (http://localhost:5173)
+        run: |
+          for i in {1..60}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5173 || true)
+            if [ "$code" = "200" ]; then
+              echo "Frontend is up."
+              exit 0
+            fi
+            echo "Waiting for frontend... ($i/60)"
+            sleep 2
+          done
+          echo "Frontend did not become healthy in time."
+          docker compose logs frontend || true
+          exit 1
+
+      - name: ZAP Baseline Scan (Frontend)
+        uses: zaproxy/action-baseline@v0.13.0
+        with:
+          target: 'http://localhost:5173'
+          cmd_options: >
+            -t 180
+            -m 5
+            -r zap-frontend.html
+          allow_issue_writing: false
+
+      - name: ZAP Baseline Scan (Backend API)
+        uses: zaproxy/action-baseline@v0.13.0
+        with:
+          target: 'http://localhost:8080'
+          cmd_options: >
+            -t 180
+            -m 5
+            -r zap-backend.html
+          allow_issue_writing: false
+
+      - name: Upload ZAP reports (HTML)
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-dast-reports
+          path: |
+            zap-frontend.html
+            zap-backend.html

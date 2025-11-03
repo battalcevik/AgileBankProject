@@ -6,9 +6,16 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-frontend:
     runs-on: ubuntu-latest
+
+    env:
+      NODE_OPTIONS: "--max_old_space_size=4096"
 
     steps:
       - name: Checkout
@@ -19,17 +26,15 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          # IMPORTANT: because we run from repo root,
-          # give the full relative path to the lockfile:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install deps
-        run: npm ci
         working-directory: frontend
+        run: npm ci
 
       - name: Build
-        run: npm run build
         working-directory: frontend
+        run: npm run build
 
       - name: Upload dist
         uses: actions/upload-artifact@v4

@@ -5,7 +5,7 @@ on:
     branches: [ main, master ]
   pull_request:
   schedule:
-    - cron: '0 5 * * 1'   # weekly Monday
+    - cron: '0 5 * * 1'
 
 jobs:
   analyze:
@@ -21,6 +21,21 @@ jobs:
       matrix:
         language: [ 'java', 'javascript' ]
 
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: bankuser
+          POSTGRES_PASSWORD: bankpass
+          POSTGRES_DB: bankdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U bankuser -d bankdb"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,7 +45,6 @@ jobs:
         with:
           languages: ${{ matrix.language }}
 
-      # Build the Java project so CodeQL can create a DB
       - name: Set up JDK for Java build
         if: matrix.language == 'java'
         uses: actions/setup-java@v4
@@ -39,10 +53,26 @@ jobs:
           java-version: '21'
           cache: maven
 
+      - name: Wait for Postgres (Java only)
+        if: matrix.language == 'java'
+        run: |
+          for i in {1..30}; do
+            nc -z localhost 5432 && echo "Postgres up" && exit 0
+            echo "Waiting for Postgres..."
+            sleep 2
+          done
+          echo "Postgres not reachable"; exit 1
+
       - name: Build backend (Java only)
         if: matrix.language == 'java'
+        env:
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/bankdb
+          SPRING_DATASOURCE_USERNAME: bankuser
+          SPRING_DATASOURCE_PASSWORD: bankpass
+          SPRING_JPA_HIBERNATE_DDL_AUTO: update
+          APP_JWT_SECRET: "dev-ci-secret-change-me"
         working-directory: backend
-        run: mvn -B -ntp -DskipTests spring-boot:repackage
+        run: mvn -B -ntp -DskipTests package
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
