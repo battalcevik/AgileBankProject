@@ -1,0 +1,82 @@
+name: Security Scans
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  dependency-check:
+    name: OWASP Dependency-Check (backend)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Dependency-Check (backend)
+        uses: dependency-check/Dependency-Check_Action@v4.0.3
+        with:
+          project: "mybank-backend"
+          path: "."
+          format: "HTML"
+          out: "reports"
+          args: >
+            --scan ./pom.xml
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: backend/reports
+
+  trivy:
+    name: Trivy Image & FS Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build images exactly like local (no push)
+      - name: Build backend image
+        run: docker build -t mybank-backend:ci ./backend
+
+      - name: Build frontend image
+        run: docker build -t mybank-frontend:ci ./frontend
+
+      # Image scans (do not fail the job on findings; set exit-code: 0)
+      - name: Trivy scan (backend image)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: mybank-backend:ci
+          format: 'table'
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '0'
+
+      - name: Trivy scan (frontend image)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: mybank-frontend:ci
+          format: 'table'
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '0'
+
+      # Optional: quick filesystem scan of the repo too
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'

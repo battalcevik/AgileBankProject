@@ -1,0 +1,19 @@
+cd /Users/battalcevik/Desktop/mybank-fullstack
+
+cat > .gitignore <<'EOF'
+# Frontend
+frontend/node_modules
+frontend/dist
+
+# Backend
+backend/target
+
+# Docker data / env
+dbdata/
+*.env
+
+# OS / IDE
+.DS_Store
+.idea/
+*.iml
+EOF
