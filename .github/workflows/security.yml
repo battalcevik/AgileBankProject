@@ -11,42 +11,75 @@ permissions:
   contents: read
 
 jobs:
-  dependency-check-docker:
-    name: OWASP Dependency-Check (Docker)
+  dependency-check:
+    name: OWASP Dependency-Check (no key, cached, auto-heal)
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Cache the NVD data used by Dependency-Check to speed up subsequent runs
-      - name: Cache Dependency-Check data
+      - name: Prepare cache & reports dirs
+        run: mkdir -p .dc-data reports
+
+      # Cache the NVD database so subsequent runs are much faster
+      - name: Restore Dependency-Check cache (NVD DB)
         uses: actions/cache@v4
         with:
-          path: ~/.dc-data
-          key: dc-data-${{ runner.os }}-${{ hashFiles('backend/pom.xml') }}
+          path: .dc-data
+          key: dc-nvd-${{ runner.os }}-${{ hashFiles('backend/pom.xml') }}
           restore-keys: |
-            dc-data-${{ runner.os }}-
+            dc-nvd-${{ runner.os }}-
 
-      - name: Run Dependency-Check (Docker)
+      # Clean any stale H2 lock files that can cause "exclusive lock" errors
+      - name: Clean stale lock files
         run: |
-          mkdir -p reports
-          # Mount repo as /src and the cached NVD DB into the container
-          docker run --rm \
-            -v "${{ github.workspace }}:/src" \
-            -v "$HOME/.dc-data:/usr/share/dependency-check/data" \
-            -w /src \
-            owasp/dependency-check:latest \
-            --project "mybank-backend" \
-            --format "HTML" \
-            --out /src/reports \
-            --scan backend/pom.xml
+          find .dc-data -type f \( -name "*.lck" -o -name "*.lock" -o -name "*.trace.db" \) -print -delete || true
 
-      - name: Upload Dependency-Check report
+      # Run Dependency-Check with weekly freshness; if update fails -> retry with --noupdate
+      - name: Run Dependency-Check (Docker) with fallback
+        run: |
+          set -e
+
+          run_dc () {
+            docker run --rm \
+              -v "$PWD/backend:/src" \
+              -v "$PWD/.dc-data:/usr/share/dependency-check/data" \
+              -v "$PWD/reports:/report" \
+              owasp/dependency-check:latest \
+                --project "agile-bank-backend" \
+                --scan /src \
+                --format "HTML" \
+                --out /report \
+                --enableExperimental \
+                --cveValidForHours 168 \
+                --failOnCVSS 11
+          }
+
+          echo "==> Attempting Dependency-Check with update (weekly freshness)"
+          if run_dc; then
+            echo "Dependency-Check completed with update."
+          else
+            echo "==> Update failed; retrying once with --noupdate using cached DB"
+            docker run --rm \
+              -v "$PWD/backend:/src" \
+              -v "$PWD/.dc-data:/usr/share/dependency-check/data" \
+              -v "$PWD/reports:/report" \
+              owasp/dependency-check:latest \
+                --project "agile-bank-backend" \
+                --scan /src \
+                --format "HTML" \
+                --out /report \
+                --enableExperimental \
+                --noupdate \
+                --failOnCVSS 11
+          fi
+
+      - name: Upload Dependency-Check HTML report
         uses: actions/upload-artifact@v4
         with:
           name: dependency-check-report
-          path: reports
+          path: reports/dependency-check-report.html
 
   trivy-fs:
     name: Trivy Filesystem Scan (backend & frontend)
